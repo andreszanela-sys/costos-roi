@@ -1,0 +1,270 @@
+<!DOCTYPE html><html lang="es"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Costos ocultos + ROI</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1"></script>
+<style>
+  :root { color-scheme: light; }
+  html, body { height: 100%; margin: 0; }
+  body{ background:#fff; font-family:Inter,system-ui,Arial; }
+.wrap{
+  box-sizing:border-box;
+  padding:10px 12px;
+  height:100%;                 /* ocupa todo el alto del iframe */
+  display:grid;
+  grid-template-rows:auto auto 1fr;  /* título, meta, canvas crece */
+  gap:8px;
+}
+
+  h3{margin:0;font-size:16px;font-weight:600;color:#111}
+  .meta{font-size:12px;color:#444}
+  /* El canvas llena la fila 3 */
+  #chart{
+    width:100% !important;
+    height:100% !important;       /* que use todo el espacio disponible */
+    display:block;
+  }
+</style>
+
+</head><body>
+<div class="wrap">
+  <h3>Costos Ocultos & ROI recuperable</h3>
+  <div class="meta" id="chartMeta"></div>
+  <canvas id="chart"
+  width="800"
+  height="400"
+  style="width:100%;height:100%;display:block;"
+  ></canvas>
+</div>
+
+
+<script>
+// ===== helper: ¿el origin entra en la lista?
+function originPermitido(origin){
+  try {
+    const h = new URL(origin).hostname;
+    return (
+      origin === 'https://innovacionregenerativa.com' ||
+      origin === 'https://www.innovacionregenerativa.com' ||
+      h.endsWith('.wixsite.com') ||
+      h.endsWith('.wix.com') ||
+      h === 'editor.wixapps.net'
+    );
+  } catch(_) { return false; }
+}
+
+/* ====== Paleta y labels por omisión ====== */
+const PALETTE = { green:"#00A676", bar:"#F6DFA7", grid:"#EEF2F7", text:"#111" };
+const DEFAULT_LABELS_ES = [
+  ['Propósito', 'y estrategia'],
+  ['Liderazgo', 'y gobernanza'],
+  ['Cultura', 'y bienestar'],
+  ['Aprendizaje', 'e innovación'],
+  ['Procesos', 'y tecnología'],
+  ['Sostenibilidad', 'e impacto']
+];
+
+
+let chart;
+let lastPayload = null;
+
+// DPI estable en HiDPI
+Chart.defaults.devicePixelRatio = () => window.devicePixelRatio || 1;
+
+// ResizeObserver para que el canvas crezca con el iframe
+let ro, rafId = 0, resizeTimer = 0;
+function mountResizeObserver() {
+  try {
+    const el = document.querySelector('.wrap');
+    if (!el) return;
+    ro?.disconnect?.();
+    ro = new ResizeObserver(() => {
+      cancelAnimationFrame(rafId);
+      clearTimeout(resizeTimer);
+      rafId = requestAnimationFrame(()=>{
+        resizeTimer = setTimeout(()=>{
+          if (chart) chart.resize();
+          else if (lastPayload) buildWhenReady(lastPayload);
+        }, 120);
+      });
+    });
+    ro.observe(el);
+  } catch(_) {}
+}
+document.addEventListener('DOMContentLoaded', mountResizeObserver);
+window.addEventListener('load', mountResizeObserver);
+
+/* ====== Helpers ====== */
+function fmtMoney(n, lang='es'){
+  try { return (n??0).toLocaleString(lang==='en'?'en-US':'es-MX',{maximumFractionDigits:0}); }
+  catch { return Math.round(n||0).toString(); }
+}
+
+function ensureArraysFromPayload(payload){
+  const labels = payload.labels && payload.labels.length ? payload.labels : DEFAULT_LABELS_ES;
+
+  // costos: aceptar array o objeto {proposito, liderazgo, ...}
+  let costosArr = [];
+  if (Array.isArray(payload.costos)) costosArr = payload.costos.map(Number);
+  else if (payload.costos && typeof payload.costos === 'object'){
+    const order = ['proposito','liderazgo','cultura','aprendizaje','procesos','sostenibilidad'];
+    costosArr = order.map(k => Number(payload.costos[k]||0));
+  } else costosArr = new Array(6).fill(0);
+
+  // promedios: array [1..5]
+  const promedios = Array.isArray(payload.promedios) ? payload.promedios.map(Number) : new Array(6).fill(3);
+  return {labels, costosArr, promedios};
+}
+
+// tasa recuperable según nivel (para la línea)
+function urgFromAvg(avg, cfg){
+  const r = (cfg?.recRates) || {};
+  if (avg<=2.0) return {tag:'En crisis',      recRate:r.crisis       ?? 0.70};
+  if (avg<=3.0) return {tag:'Desconectado',   recRate:r.desconectado ?? 0.60};
+  if (avg<=4.0) return {tag:'En transición',  recRate:r.transicion   ?? 0.45};
+  return            {tag:'Regenerativa',      recRate:r.regenerativa ?? 0.30};
+}
+
+function buildWhenReady(payload){
+  lastPayload = payload;
+  const canvas = document.getElementById('chart');
+
+  function tick(){
+    const w = canvas.offsetWidth || canvas.clientWidth || 0;
+    const h = canvas.offsetHeight || canvas.clientHeight || 0;
+
+    // solo construimos cuando el iframe ya está expandido en Wix
+    if (w > 40 && h > 40) {
+      build(payload);
+    } else {
+      requestAnimationFrame(tick); // vuelve a intentar en el próximo frame
+    }
+  }
+
+  tick();
+}
+
+
+/* ====== Construcción del gráfico ====== */
+function build(payload){
+  const cfg = payload.config || {};
+  const {labels, costosArr, promedios} = ensureArraysFromPayload(payload);
+
+  console.debug('[COSTOS] payload recibido:', payload);
+  console.debug('[COSTOS] costosArr:', costosArr, 'promedios:', promedios);
+
+  const ctx = document.getElementById('chart');
+
+  const costoTotal = Math.round(costosArr.reduce((a,b)=>a+(+b||0),0));
+  const rec = costosArr.map((c,i)=> Math.round((+c||0) * urgFromAvg(promedios[i], cfg).recRate));
+  const recTotal = Math.round(rec.reduce((a,b)=>a+b,0));
+
+  const curr = cfg.currency || 'USD';
+  const hz   = cfg.horizonte || '12–18 meses';
+  const roiMin = Number(cfg.roiMultipleMin ?? 5);
+
+  // texto superior
+  document.getElementById('chartMeta').textContent =
+    `Costo oculto total ≈ $${fmtMoney(costoTotal, payload.lang)} ${curr} · ` +
+    `Recuperable (${hz}): $${fmtMoney(recTotal, payload.lang)} ${curr}`;
+
+  // límites sugeridos para que no quede en 0–1
+  const maxBar  = Math.max(...costosArr, 0);
+  const maxLine = Math.max(...rec, 0);
+  const maxY    = Math.max(maxBar, maxLine, 1);
+
+  if (chart) chart.destroy();
+
+chart = new Chart(ctx, {
+    type: 'bar',   // ← ESTA LÍNEA ES LA DIFERENCIA
+    data:{
+      labels,
+      datasets:[
+        {
+          type:'bar',
+          label: `Costo oculto (${curr})`,
+          data: costosArr,
+          backgroundColor: PALETTE.bar,
+          borderWidth: 0,
+          borderRadius: 8,
+          barThickness: 38,
+          maxBarThickness: 42
+        },
+        {
+          type:'line',
+          label: `Recuperable estimado (${curr})`,
+          data: rec,
+          borderColor: PALETTE.green,
+          pointBackgroundColor: PALETTE.green,
+          pointBorderColor: '#fff',
+          pointBorderWidth: 1,
+          pointRadius: 3,
+          pointHoverRadius: 5,
+          tension: 0.25,
+          fill: false,
+          yAxisID: 'y'
+        }
+      ]
+    },
+
+    options:{
+      responsive:true,
+      maintainAspectRatio:false,
+      normalized:true,
+      layout:{ padding:{ top: 6, right: 6, bottom: 6, left: 0 } },
+      plugins:{
+        legend:{ position:'top', labels:{ color: PALETTE.text, usePointStyle:true, boxWidth: 10 } },
+        tooltip:{
+          callbacks:{
+            label: (ctx)=>{
+              const val = ctx.raw||0;
+              return `${ctx.dataset.label}: $${fmtMoney(val, payload.lang)} USD`;
+            },
+            afterBody:(items)=>{
+              const i = items[0].dataIndex;
+              const u = urgFromAvg(promedios[i], cfg);
+              const r = rec[i]||0;
+              const pot = Math.round(r * roiMin);
+              return [
+                `Nivel: ${u.tag}`,
+                `ROI potencial (≥${roiMin}x): $${fmtMoney(pot, payload.lang)} ${curr}`
+              ];
+            }
+          }
+        }
+      },
+      scales:{
+        y:{
+          beginAtZero:true,
+          suggestedMax: Math.round(maxY * 1.15),
+          grid:{ color: PALETTE.grid },
+          ticks:{ callback:(v)=>'$'+fmtMoney(v, payload.lang)+' '+curr, precision: 0 }
+        },
+        x:{ grid:{ display:false }, ticks:{ color: PALETTE.text, maxRotation: 0, autoSkip: false } }
+      },
+      animation:{ duration: 600, easing: 'easeOutQuart' }
+    }
+  });
+}
+
+/* ====== Handshake con Velo ====== */
+window.addEventListener('load', () => {
+  window.parent?.postMessage({ type: 'ready', chart: 'costos' }, '*');
+});
+
+/* ====== Listener para recibir datos ====== */
+window.addEventListener('message', (ev)=>{
+  if (!originPermitido(ev.origin)) return;
+  const d = ev.data || {};
+  if (d && (d.type==='costos' || Array.isArray(d.costos) || d.costos)) {
+    buildWhenReady(d);
+  } else if (Array.isArray(d)) {
+    buildWhenReady({ costos:d, promedios:new Array(d.length).fill(3), labels:DEFAULT_LABELS_ES, lang:'es' });
+  }
+});
+
+/* ====== Render inicial (sin datos) ====== */
+buildWhenReady({ costos:[0,0,0,0,0,0], promedios:[3,3,3,3,3,3], labels:DEFAULT_LABELS_ES, lang:'es' });
+</script>
+
+</body></html>
