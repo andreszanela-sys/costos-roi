@@ -218,6 +218,7 @@ chart = new Chart(ctx, {
           callbacks:{
             label: (ctx)=>{
               const val = ctx.raw||0;
+              const curr = (payload.config?.currency || 'USD');
               return `${ctx.dataset.label}: $${fmtMoney(val, payload.lang)} USD`;
             },
             afterBody:(items)=>{
@@ -246,6 +247,7 @@ chart = new Chart(ctx, {
     }
   });
   window.chart = chart;
+  try { window.parent?.postMessage({ type:'built', chart:'costos' }, '*'); } catch(_){}
 }
 
 function getChartPNG() {
