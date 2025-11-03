@@ -101,9 +101,10 @@ function fmtMoney(n, lang='es'){
 }
 
 function ensureArraysFromPayload(payload){
-  const labels = payload.labels && payload.labels.length ? payload.labels : DEFAULT_LABELS_ES;
+  let labels = (payload.labels && payload.labels.length)
+    ? payload.labels
+    : DEFAULT_LABELS_ES;
   labels = labels.map(l => Array.isArray(l) ? l : (l != null ? String(l) : ''));
-
   // costos: aceptar array o objeto {proposito, liderazgo, ...}
   let costosArr = [];
   if (Array.isArray(payload.costos)) costosArr = payload.costos.map(n => Number(n||0));
