@@ -102,10 +102,11 @@ function fmtMoney(n, lang='es'){
 
 function ensureArraysFromPayload(payload){
   const labels = payload.labels && payload.labels.length ? payload.labels : DEFAULT_LABELS_ES;
+  labels = labels.map(l => Array.isArray(l) ? l : (l != null ? String(l) : ''));
 
   // costos: aceptar array o objeto {proposito, liderazgo, ...}
   let costosArr = [];
-  if (Array.isArray(payload.costos)) costosArr = payload.costos.map(Number);
+  if (Array.isArray(payload.costos)) costosArr = payload.costos.map(n => Number(n||0));
   else if (payload.costos && typeof payload.costos === 'object'){
     const order = ['proposito','liderazgo','cultura','aprendizaje','procesos','sostenibilidad'];
     costosArr = order.map(k => Number(payload.costos[k]||0));
@@ -145,6 +146,7 @@ function buildWhenReady(payload){
 }
 
 
+
 /* ====== Construcción del gráfico ====== */
 function build(payload){
   const cfg = payload.config || {};
@@ -153,7 +155,8 @@ function build(payload){
   console.debug('[COSTOS] payload recibido:', payload);
   console.debug('[COSTOS] costosArr:', costosArr, 'promedios:', promedios);
 
-  const ctx = document.getElementById('chart');
+  const canvas = document.getElementById('chart');
+  if (!canvas) { console.error('[COSTOS] No se encontró #chart'); return; }
 
   const costoTotal = Math.round(costosArr.reduce((a,b)=>a+(+b||0),0));
   const rec = costosArr.map((c,i)=> Math.round((+c||0) * urgFromAvg(promedios[i], cfg).recRate));
@@ -164,18 +167,20 @@ function build(payload){
   const roiMin = Number(cfg.roiMultipleMin ?? 5);
 
   // texto superior
-  document.getElementById('chartMeta').textContent =
-    `Costo oculto total ≈ $${fmtMoney(costoTotal, payload.lang)} ${curr} · ` +
-    `Recuperable (${hz}): $${fmtMoney(recTotal, payload.lang)} ${curr}`;
-
+  const metaEl = document.getElementById('chartMeta');
+  if (metaEl) {
+    metaEl.textContent =
+      `Costo oculto total ≈ $${fmtMoney(costoTotal, payload.lang)} ${curr} · ` +
+      `Recuperable (${hz}): $${fmtMoney(recTotal, payload.lang)} ${curr}`;
+  }
   // límites sugeridos para que no quede en 0–1
   const maxBar  = Math.max(...costosArr, 0);
   const maxLine = Math.max(...rec, 0);
   const maxY    = Math.max(maxBar, maxLine, 1);
 
-  if (chart) chart.destroy();
-
-chart = new Chart(ctx, {
+ try {
+    if (chart) chart.destroy();
+    chart = new Chart(canvas, {
     type: 'bar',   // ← ESTA LÍNEA ES LA DIFERENCIA
     data:{
       labels,
@@ -218,7 +223,6 @@ chart = new Chart(ctx, {
           callbacks:{
             label: (ctx)=>{
               const val = ctx.raw||0;
-              const curr = (payload.config?.currency || 'USD');
               return `${ctx.dataset.label}: $${fmtMoney(val, payload.lang)} USD`;
             },
             afterBody:(items)=>{
@@ -247,7 +251,10 @@ chart = new Chart(ctx, {
     }
   });
   window.chart = chart;
-  try { window.parent?.postMessage({ type:'built', chart:'costos' }, '*'); } catch(_){}
+  try { window.parent?.postMessage({ type:'built', chart:'costos' }, '*'); } catch(_) {}
+  } catch (e){
+    console.error('[COSTOS] Error construyendo Chart:', e);
+  }
 }
 
 function getChartPNG() {
@@ -278,27 +285,20 @@ window.addEventListener('load', () => {
 
 /* ====== Listener para recibir datos ====== */
 window.addEventListener('message', (ev)=>{
-  if (!originPermitido(ev.origin)) return;
+  if (!ev || !ev.data) return;
+  // Si no viene origin (p.ej. entornos de prueba), no bloquees; o mantén tu whitelist:
+  if (ev.origin && !originPermitido(ev.origin)) return;
+  
+  
   const d = ev.data || {};
-  if (d && (d.type==='costos' || Array.isArray(d.costos) || d.costos)) {
+  if (d.type==='costos' || Array.isArray(d.costos) || (d.costos&& typeof d.costos==='object')) {
     buildWhenReady(d);
   } else if (Array.isArray(d)) {
     buildWhenReady({ costos:d, promedios:new Array(d.length).fill(3), labels:DEFAULT_LABELS_ES, lang:'es' });
+  } else if (d.type === 'snapshot') {
+    const snap = getChartPNG();
+    window.parent?.postMessage({ type:'snapshot-ok', chart:d.chart||'costos', ...snap }, '*');
   }
-
-    if (d && d.type === 'snapshot') {
-        const snap = getChartPNG();
-        window.parent?.postMessage({
-          type: 'snapshot-ok',
-          chart: d.chart || 'costos',
-          dataURL: snap.dataURL,
-          w: snap.w,
-          h: snap.h,
-          error: snap.error || null
-        }, '*');
-      }
-
-
 });
 
 /* ====== Render inicial (sin datos) ====== */
