@@ -65,7 +65,7 @@ const DEFAULT_LABELS_ES = [
 ];
 
 
-let chart;
+let chart = null;
 let lastPayload = null;
 
 // DPI estable en HiDPI
@@ -245,7 +245,29 @@ chart = new Chart(ctx, {
       animation:{ duration: 600, easing: 'easeOutQuart' }
     }
   });
+  window.chart = chart;
 }
+
+function getChartPNG() {
+  try {
+    if (window.chart && typeof window.chart.toBase64Image === 'function') {
+      const dataURL = window.chart.toBase64Image('image/png', 1.0);
+      const w = window.chart?.canvas?.width  || 980;
+      const h = window.chart?.canvas?.height || 540;
+      return { dataURL, w, h };
+    }
+    const canvas = document.getElementById('chart');
+    if (canvas && canvas.toDataURL) {
+      const dataURL = canvas.toDataURL('image/png', 1.0);
+      return { dataURL, w: canvas.width || 980, h: canvas.height || 540 };
+    }
+    return { dataURL: null, w: 0, h: 0, error: 'No chart/canvas available' };
+  } catch(e) {
+    return { dataURL: null, w: 0, h: 0, error: e?.message || String(e) };
+  }
+}
+
+
 
 /* ====== Handshake con Velo ====== */
 window.addEventListener('load', () => {
@@ -261,6 +283,20 @@ window.addEventListener('message', (ev)=>{
   } else if (Array.isArray(d)) {
     buildWhenReady({ costos:d, promedios:new Array(d.length).fill(3), labels:DEFAULT_LABELS_ES, lang:'es' });
   }
+
+    if (d && d.type === 'snapshot') {
+        const snap = getChartPNG();
+        window.parent?.postMessage({
+          type: 'snapshot-ok',
+          chart: d.chart || 'costos',
+          dataURL: snap.dataURL,
+          w: snap.w,
+          h: snap.h,
+          error: snap.error || null
+        }, '*');
+      }
+
+
 });
 
 /* ====== Render inicial (sin datos) ====== */
