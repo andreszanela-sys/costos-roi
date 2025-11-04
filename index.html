@@ -260,6 +260,19 @@ function build(payload){
 
 function getChartPNG() {
   try {
+    const canvas = document.getElementById('chart');
+    // ⬇️ fuerza JPEG (evita problemas de PNG/transparencia)
+    const dataURL = canvas.toDataURL('image/jpeg', 0.92);
+    return { dataURL, w: canvas.width || 980, h: canvas.height || 540, mime: 'image/jpeg' };
+  } catch(e) {
+    return { dataURL: null, w:0, h:0, error: e?.message || String(e) };
+  }
+}
+
+
+
+/*function getChartPNG() {
+  try {
     if (window.chart && typeof window.chart.toBase64Image === 'function') {
       const dataURL = window.chart.toBase64Image('image/png', 1.0);
       const w = window.chart?.canvas?.width  || 980;
@@ -275,7 +288,7 @@ function getChartPNG() {
   } catch(e) {
     return { dataURL: null, w: 0, h: 0, error: e?.message || String(e) };
   }
-}
+}*/
 
 
 
