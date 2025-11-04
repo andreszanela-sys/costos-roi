@@ -260,14 +260,26 @@ function build(payload){
 
 function getChartPNG() {
   try {
-    const canvas = document.getElementById('chart');
-    // ⬇️ fuerza JPEG (evita problemas de PNG/transparencia)
-    const dataURL = canvas.toDataURL('image/jpeg', 0.92);
-    return { dataURL, w: canvas.width || 980, h: canvas.height || 540, mime: 'image/jpeg' };
-  } catch(e) {
+    const src = document.getElementById('chart');
+    // lienzo temporal del mismo tamaño
+    const tmp = document.createElement('canvas');
+    tmp.width  = src.width  || 980;
+    tmp.height = src.height || 540;
+    const ctx = tmp.getContext('2d');
+
+    // fondo blanco para evitar el “negro”
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, tmp.width, tmp.height);
+    ctx.drawImage(src, 0, 0);
+
+    // sigue siendo JPEG (fondo ya blanco)
+    const dataURL = tmp.toDataURL('image/jpeg', 0.92);
+    return { dataURL, w: tmp.width, h: tmp.height, mime: 'image/jpeg' };
+  } catch (e) {
     return { dataURL: null, w:0, h:0, error: e?.message || String(e) };
   }
 }
+
 
 
 
