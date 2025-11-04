@@ -303,8 +303,35 @@ window.addEventListener('message', (ev)=>{
   // Si no viene origin (p.ej. entornos de prueba), no bloquees; o mantén tu whitelist:
   if (ev.origin && !originPermitido(ev.origin)) return;
   
+  const d = ev?.data ?? {};
+
+    // 1) Cargar/actualizar la gráfica
+    if (d.type === 'costos' || Array.isArray(d.costos) || (d.costos && typeof d.costos === 'object')) {
+      lastPayload = d;
+      buildWhenReady(d);
+
+      // auto-snapshot opcional: si Velo manda autosnap:true, devolvemos imagen al terminar
+      if (d.autosnap) {
+        setTimeout(() => {
+          const snap = getChartPNG();
+          window.parent?.postMessage({ type:'snapshot-ok', chart: d.chart || 'costos', ...snap }, '*');
+        }, 60);
+      }
+      return;
+    }
+
+    // 2) Petición explícita de snapshot
+    if (d.type === 'snapshot' || d.type === 'get-snapshot') {
+      const snap = getChartPNG();
+      // debug útil para verificar el prefijo:
+      console.debug('[SNAP head]', (snap.dataURL || '').slice(0, 22)); // debe empezar con "data:image/"
+      window.parent?.postMessage({ type:'snapshot-ok', chart: d.chart || 'costos', ...snap }, '*');
+      return;
+    }
+
+
   
-  const d = ev.data || {};
+  /*const d = ev.data || {};
   if (d.type==='costos' || Array.isArray(d.costos) || (d.costos&& typeof d.costos==='object')) {
     buildWhenReady(d);
   } else if (Array.isArray(d)) {
@@ -312,7 +339,7 @@ window.addEventListener('message', (ev)=>{
   } else if (d.type === 'snapshot') {
     const snap = getChartPNG();
     window.parent?.postMessage({ type:'snapshot-ok', chart:d.chart||'costos', ...snap }, '*');
-  }
+  }*/
 });
 
 /* ====== Render inicial (sin datos) ====== */
