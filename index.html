@@ -1,1210 +1,360 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="UTF-8" />
-<title>Generador PDF</title>
-<!-- jsPDF (puede ser la versión que ya usabas) -->
-<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
-
+<!DOCTYPE html><html lang="es"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Costos ocultos + ROI</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1"></script>
 <style>
-  /* opcional: estilos internos si quieres previsualizar algo */
-  body { font-family: 'Open Sans', sans-serif; font-size: 12px; color:#000; }
+  :root { color-scheme: light; }
+  html, body { height: 100%; margin: 0; }
+  body{ background:#fff; font-family:Inter,system-ui,Arial; }
+.wrap{
+  box-sizing:border-box;
+  padding:10px 12px;
+  height:100%;                 /* ocupa todo el alto del iframe */
+  display:grid;
+  grid-template-rows:auto auto 1fr;  /* título, meta, canvas crece */
+  gap:8px;
+}
+
+  h3{margin:0;font-size:16px;font-weight:600;color:#111}
+  .meta{font-size:12px;color:#444}
+  /* El canvas llena la fila 3 */
+  #chart{
+    width:100% !important;
+    height:100% !important;       /* que use todo el espacio disponible */
+    display:block;
+  }
 </style>
-</head>
-<body>
+
+</head><body>
+<div class="wrap">
+  <h3>Costos Ocultos & ROI recuperable</h3>
+  <div class="meta" id="chartMeta"></div>
+  <canvas id="chart"
+  width="800"
+  height="400"
+  style="width:100%;height:100%;display:block;"
+  ></canvas>
+</div>
+
 
 <script>
-
-// ====== Helpers de formato / espaciado ======
-const LHF = 1.35;                       // line-height factor global
-const P_SP = 8;                         // espacio entre párrafos (pt)
-
-
-function drawLabelValue(doc, label, value, x, y, wLabel=110, size=9) {
-  doc.setFont("helvetica", "bold");  doc.setFontSize(size);
-  doc.text(label, x, y);
-  doc.setFont("helvetica", "normal");
-  doc.text(value, x + wLabel, y);
-  return y + size * LHF;
+// ===== helper: ¿el origin entra en la lista?
+function originPermitido(origin){
+  try {
+    const h = new URL(origin).hostname;
+    return (
+      origin === 'https://innovacionregenerativa.com' ||
+      origin === 'https://www.innovacionregenerativa.com' ||
+      h.endsWith('.wixsite.com') ||
+      h.endsWith('.wix.com') ||
+      h === 'editor.wixapps.net'
+    );
+  } catch(_) { return false; }
 }
 
-function fmtAvg(v){ return (v!=null && !isNaN(v)) ? `${Number(v).toFixed(1)} / 5` : "-"; }
-function fmtROI(v){
-  if (v===null || v===undefined || v==="") return "-";
-  const num = Number(v);
-  if (Number.isNaN(num)) return String(v);
-  return `${(num*100).toFixed(0)}%`;
-}
-
-// ====== Tabla Resultados por dimensión (4 columnas) ======
-// ================= TABLA CON ROI =================
-function drawResultsTable(doc, {lang, x, y, w}, rows){
-  // Columnas: Dimensión | Promedio | Costo oculto | ROI
-  const colW = [ w*0.46, w*0.14, w*0.22, w*0.18 ];
-  const HROW = 18;
-  const y0   = y;
-
-  // Encabezado
-  doc.setFillColor(240,240,240);
-  doc.rect(x, y, w, HROW, 'F');
-  doc.setFont('helvetica','bold'); doc.setFontSize(10);
-
-  const H = (t)=> (lang==='en'?t.en:t.es);
-  const HEADS = [
-    H({es:'Dimensión', en:'Dimension'}),
-    H({es:'Promedio',  en:'Avg'}),
-    H({es:'Costo oculto', en:'Hidden cost'}),
-    H({es:'ROI (potencial)', en:'ROI (potential)'})
-  ];
-
-  let cx = x + 6, cy = y + 12;
-  HEADS.forEach((h, i)=>{ doc.text(String(h), cx, cy); cx += colW[i]; });
-  y += HROW;
-
-  // Filas
-  doc.setFont('helvetica','normal'); doc.setFontSize(9);
-  rows.forEach(r=>{
-    // líneas divisorias
-    doc.setDrawColor(230); doc.line(x, y, x+w, y);
-
-    let tx = x + 4, ty = y + 11;
-
-    // Col 1: Dimensión (wrap)
-    const nameLines = doc.splitTextToSize(r.name, colW[0]-12);
-    doc.text(nameLines, tx, ty);
-    const h1 = Math.max(HROW, nameLines.length*12+6);
-
-    // Col 2: Promedio
-    tx = x + colW[0] + 6;
-    doc.text(`${r.avg} / 5`, tx, ty);
-
-    // Col 3: Costo
-    tx += colW[1];
-    doc.text(r.costStr, tx, ty);
-
-    // Col 4: ROI
-    tx += colW[2];
-    doc.text(r.roiStr, tx, ty);
-
-    y += Math.max(h1, HROW);
-  });
-
-  // marco sutil
-  doc.setDrawColor(200); doc.rect(x, y0, w, y - y0);
-  return y + GAP.md;
-
-}
-
-// --- Espaciados estándar (pt)
-const GAP = { xs: 6, sm: 12, md: 18, lg: 28, xl: 40 };
-function bump(y, a = GAP.md){ return y + a; }
-
-
-// === CONFIG ROI (idéntico a Velo) ===
-const CONFIG_ROI = {
-  recRates: { crisis: 0.70, desconectado: 0.60, transicion: 0.45, regenerativa: 0.30 },
-  roiMultipleMin: 5,           // "≥5x"
-  horizonte: '12–18 meses',
-  currency: 'USD'
-};
-
-// === Traducción de puntaje → etiqueta de nivel (igual que en Velo) ===
-function nivelConexionTexto(p, l) {
-  if (p <= 2.0) return l==='en' ? 'In crisis'     : 'En crisis';
-  if (p <= 3.0) return l==='en' ? 'Disconnected'  : 'Desconectado';
-  if (p <= 4.0) return l==='en' ? 'In transition' : 'En transición';
-  return               l==='en' ? 'Regenerative'  : 'Regenerativa';
-}
-
-// === Ratio recuperable desde score (misma lógica que recRateFromScore de Velo) ===
-function recRateFromScore(score){
-  if (score <= 2.0) return CONFIG_ROI.recRates.crisis;
-  if (score <= 3.0) return CONFIG_ROI.recRates.desconectado;
-  if (score <= 4.0) return CONFIG_ROI.recRates.transicion;
-  return              CONFIG_ROI.recRates.regenerativa;
-}
-
-// === Helpers de formato/parseo seguros ===
-function moneyToNumber(s){
-  // "$16,800 USD" -> 16800
-  if (s == null) return 0;
-  const n = String(s).replace(/[^\d.,-]/g,'').replace(/,/g,'');
-  return Number(n || 0);
-}
-function fmtMoney(n, lang){
-  try { return '$' + Math.round(+n||0).toLocaleString(lang==='en'?'en-US':'es-MX') + ' ' + CONFIG_ROI.currency; }
-  catch{ return '$' + Math.round(+n||0) + ' ' + CONFIG_ROI.currency; }
-}
-
-// === Interpretaciones KPI (ES/EN) ===
-/*function interpretNivel(nivel, lang){
-  const m = {
-    es:{ crisis:'Riesgo muy alto (clima y foco estratégico)', desconectado:'Riesgo alto (tensión cultural)', transicion:'Riesgo medio (oportunidad de alineación)', regenerativa:'Riesgo bajo (consolidar hábitos)' },
-    en:{ crisis:'Very high risk (climate & strategic focus)', disconnected:'High risk (cultural tension)', intransition:'Medium risk (alignment opportunity)', regenerative:'Low risk (consolidate habits)' }
-  };
-  const k = (nivel||'').toLowerCase();
-  if (k.includes('crisis'))        return m[lang].crisis;
-  if (k.includes('desconect')||k.includes('disconnect')) return m[lang].desconectado;
-  if (k.includes('trans'))         return m[lang].transicion;
-  return m[lang].regenerativa;
-}
-function interpretCosto(totalNum, lang){
-  // Umbrales orientativos; ajusta si usas otra moneda
-  if (totalNum >= 100000) return (lang==='en'?'High annual leakage':'Fuga anual alta');
-  if (totalNum >= 50000)  return (lang==='en'?'Moderate–high leakage':'Fuga moderada–alta');
-  if (totalNum > 0)       return (lang==='en'?'Moderate leakage':'Fuga moderada');
-  return (lang==='en'?'No leakage':'Sin fuga');
-}
-function interpretROI(recNum, lang){
-  if (recNum <= 0) return (lang==='en'?'No recoverable potential detected':'Sin potencial recuperable detectado');
-  return (lang==='en'
-    ? 'Recoverable in ~12–18 months if prioritized'
-    : 'Recuperable en ~12–18 meses si se prioriza');
-}*/
-
-
-// === Interpretaciones KPI (ES/EN) ===
-function interpretNivel(nivel, lang){
-  const m = {
-    es:{ crisis:'Riesgo muy alto (clima y foco estratégico)',
-         desconectado:'Riesgo alto (tensión cultural)',
-         transicion:'Riesgo medio (oportunidad de alineación)',
-         regenerativa:'Riesgo bajo (consolidar hábitos)' },
-    en:{ crisis:'Very high risk (climate & strategic focus)',
-         desconectado:'High risk (cultural tension)',
-         transicion:'Medium risk (alignment opportunity)',
-         regenerativa:'Low risk (consolidate habits)' }
-  };
-  const k = (nivel||'').toLowerCase();
-  if (k.includes('crisis'))        return m[lang].crisis;
-  if (k.includes('desconect')||k.includes('disconnect')) return m[lang].desconectado;
-  if (k.includes('trans'))         return m[lang].transicion;
-  return m[lang].regenerativa;
-}
-
-function interpretPromedio(prom, lang){
-  const p = Number(prom||0);
-  if (p <= 2.0) return (lang==='en'?'High disconnection — immediate containment':'Desconexión alta — contención inmediata');
-  if (p <= 3.0) return (lang==='en'?'Medium disconnection — prioritize 2–3 areas':'Desconexión media — priorizar 2–3 áreas');
-  if (p <= 4.0) return (lang==='en'?'Moderate connection — consolidate key habits':'Conexión moderada — consolidar hábitos clave');
-  return (lang==='en'?'Solid connection — maintain cadence & metrics':'Conexión sólida — mantener cadencia y métricas');
-}
-
-function interpretCosto(totalNum, lang){
-  if (totalNum >= 100000) return (lang==='en'?'High annual leakage':'Fuga anual alta');
-  if (totalNum >= 50000)  return (lang==='en'?'Moderate–high leakage':'Fuga moderada–alta');
-  if (totalNum > 0)       return (lang==='en'?'Moderate leakage':'Fuga moderada');
-  return (lang==='en'?'No leakage':'Sin fuga');
-}
-
-function interpretROI(recNum, lang){
-  if (recNum <= 0) return (lang==='en'?'No recoverable potential detected':'Sin potencial recuperable detectado');
-  return (lang==='en'
-    ? 'Recoverable in ~12–18 months if prioritized'
-    : 'Recuperable en ~12–18 meses si se prioriza');
-}
-
-// === Bloque “Resumen ejecutivo” (Indicador | Valor | Interpretación) ===
-function drawExecutiveSummary(doc, {x, y, w, lang, nivelGeneral, promedioGeneral, costoTotalStr, recTotalNum}){
-  const HROW = 20, PAD = 8;
-  const cols = [ w*0.30, w*0.28, w*0.42 ];
-  const y0 = y;
-
-  // Encabezado
-  doc.setFillColor(240,240,240);
-  doc.roundedRect(x, y, w, HROW, 6, 6, 'F');
-  doc.setFont('helvetica','bold'); doc.setFontSize(11);
-  const HEADS = (lang==='en' ? ['Indicator','Value','Interpretation']
-                              : ['Indicador','Valor','Interpretación']);
-  let cx = x + PAD, cy = y + 13;
-  HEADS.forEach((h,i)=>{ doc.text(h, cx, cy); cx += cols[i]; });
-  y += HROW;
-
-  // Datos
-  const costoNum = moneyToNumber(costoTotalStr);
-  const filas = [
-    [(lang==='en'?'General level':'Nivel general'), nivelGeneral, interpretNivel(nivelGeneral, lang)],
-    [(lang==='en'?'Overall score':'Promedio general'), `${Number(promedioGeneral||0).toFixed(2)} / 5`, interpretPromedio(promedioGeneral, lang)],
-    [(lang==='en'?'Total hidden cost':'Costo oculto total'), costoTotalStr, interpretCosto(costoNum, lang)],
-    [(lang==='en'?'Recoverable (potential)':'Recuperable (potencial)'), fmtMoney(recTotalNum, lang), interpretROI(recTotalNum, lang)],
-  ];
-
-  // Filas
-  filas.forEach(row=>{
-    doc.setDrawColor(230); doc.line(x, y, x+w, y);
-    // col 1 (label)
-    let tx = x + PAD, ty = y + 13;
-    doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.text(row[0], tx, ty);
-    // col 2 (valor)
-    tx += cols[0]; doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.text(row[1], tx, ty);
-    // col 3 (interpretación wrap)
-    tx += cols[1];
-    const wrap = doc.splitTextToSize(String(row[2]), cols[2]-PAD);
-    doc.setFontSize(10.5);
-    doc.text(wrap, tx, ty);
-    const h = Math.max(HROW, 14 * wrap.length + 6);
-    y += h;
-  });
-
-  // Marco
-  doc.setDrawColor(200); doc.roundedRect(x, y0, w, y - y0, 6, 6);
-  return y + GAP.lg;
-}
-
-/*function hardWrapLongTokens(s, max=28){
-  return String(s).split(/\s/).map(tok=>{
-    if (tok.length <= max) return tok;
-    const parts=[]; for (let i=0;i<tok.length;i+=max) parts.push(tok.slice(i,i+max)+'-');
-    parts[parts.length-1]=parts[parts.length-1].replace(/-$/,''); // quita guion final
-    return parts.join(' ');
-  }).join(' ');
-}*/
-
-
-
-// === Párrafos con buen interlineado/espaciado ===
-
-function drawParagraph(doc, text, x, y, maxW, font='helvetica', style='normal', size=10.5, lineH=16, spaceAfter=GAP.md){
-  doc.setFont(font, style); doc.setFontSize(size);
-
-    const pageH  = doc.internal.pageSize.getHeight();
-    const top    = 40;   // usa tu M_TOP si lo prefieres
-    const bottom = 60;
-    const yLimit = pageH - bottom;
-
-  const lines = doc.splitTextToSize(String(text||''), maxW);
-  
-    for (const line of lines){
-        if (y > yLimit){
-        doc.addPage();
-        if (doc.setTextColor) doc.setTextColor(0,0,0); // reasegura color
-        doc.setFont(font, style); 
-        doc.setFontSize(size);
-        y = top;
-        }
-        doc.text(line, x, y);
-        y += lineH;
-    }
-    return y + spaceAfter;
-    
-
-  //doc.text(lines, x, y);
-  //return y + lines.length*lineH + spaceAfter;
-}
-
-
-function drawBoldLabelThenText(doc, label, text, x, y, maxW, gap = 6, size = 10, lineH = 12) {
-  const pageH  = doc.internal.pageSize.getHeight();
-  const top    = 40;   // usa tu M_TOP si prefieres
-  const bottom = 60;
-  const yLimit = pageH - bottom;
-
-  const setBold = () => { doc.setFont('helvetica','bold');   doc.setFontSize(size); };
-  const setBody = () => { doc.setFont('helvetica','normal'); doc.setFontSize(size); };
-  const ensureInk = () => { if (doc.setTextColor) doc.setTextColor(0,0,0); };
-
-  const br = () => {                // salto de página seguro
-    doc.addPage();
-    ensureInk();
-    y = top;
-  };
-
-  const needsBreak = (h = lineH) => (y + h > yLimit);
-
-  const safeText = String(text ?? '');
-  const safeLabel = String(label ?? '');
-
-  // 1) Si la etiqueta es demasiado ancha para compartir línea, la apilamos
-  setBold();
-  const labelW = doc.getTextWidth(safeLabel);
-  const shareLine = (labelW + gap < maxW * 0.66); // heurística: cabe razonable
-
-  if (!shareLine) {
-    // (A) Imprime etiqueta sola en una línea
-    if (needsBreak()) br();
-    setBold(); doc.text(safeLabel, x, y); y += lineH;
-
-    // (B) Imprime el cuerpo con paginación línea por línea
-    setBody();
-    const lines = doc.splitTextToSize(safeText, maxW);
-    for (const line of lines) {
-      if (needsBreak()) br(), setBody();
-      doc.text(line, x, y);
-      y += lineH;
-    }
-    return y;
-  }
-
-  // 2) Etiqueta y primer trozo del cuerpo en la misma línea
-  const firstLineW = Math.max(0, maxW - labelW - gap);
-  setBody();
-  const chunks = doc.splitTextToSize(safeText, firstLineW);
-  const first = chunks.shift() || '';
-
-  if (needsBreak()) br();
-  setBold(); doc.text(safeLabel, x, y);
-  setBody(); doc.text(first, x + labelW + gap, y);
-  y += lineH;
-
-  // 3) Resto del cuerpo, línea por línea con salto seguro
-  for (const line of chunks) {
-    if (needsBreak()) br(), setBody();
-    doc.text(line, x, y);
-    y += lineH;
-  }
-
-  return y;
-}
-
-
-
-
-// Helper: etiqueta en bold + texto normal con salto de línea correcto
-/*function drawBoldLabelThenText(doc, label, text, x, y, maxW, gap = 6, size = 10, lineH = 12) {
-  
-  
-  doc.setFont('helvetica','bold');  doc.setFontSize(size);
-  const labelW = doc.getTextWidth(label);
-
-  // Si la etiqueta cabe y deja espacio para texto en la misma línea
-  const firstLineW = Math.max(0, maxW - labelW - gap);
-
-  // Partimos el texto normal para la primera línea (resto va abajo)
-  doc.setFont('helvetica','normal');
-  const firstSlice = doc.splitTextToSize(text, firstLineW);
-  const firstLineText = firstSlice.shift() || '';
-
-  // Dibuja etiqueta + primer pedazo en la misma línea
-  doc.setFont('helvetica','bold');
-  doc.text(label, x, y);
-  doc.setFont('helvetica','normal');
-  doc.text(firstLineText, x + labelW + gap, y);
-
-  // Dibuja el resto del texto, línea por línea, debajo
-  let yy = y + lineH;
-  firstSlice.forEach(line => {
-    doc.text(line, x, yy);
-    yy += lineH;
-  });
-
-  return yy; // devuelve el siguiente y disponible
-}*/
-
-
-
-
-
-// ——— Normaliza el texto que viene del HTML (quita NBSPs y espacios finos) ———
-function normalizeText(input){
-  if (!input) return '';
-  let t = String(input)
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/[\u00A0\u202F]/g, ' ')
-    .replace(/[\u2000-\u200B]/g, ' ')
-    .replace(/\u00AD|\u2060|\ufeff/g, '')
-    .replace(/[ \t]{2,}/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .replace(/[“”]/g, '"')
-    .replace(/[‘’]/g, "'")
-    .replace(/[–—]/g, '-')
-    .replace(/\s+([.,;:!?…)\]\}])/g, '$1')
-    .replace(/([(\[\{])\s+/g, '$1')
-    .trim();
-
-  // colapsa secuencias "l e t r a s" separadas
-  t = t.replace(/\b((?:\p{L}\s){2,}\p{L})\b/gu, m => m.replace(/\s+/g, ''));
-  t = t.replace(/\b((?:\p{N}\s){2,}\p{N})\b/gu, m => m.replace(/\s+/g, ''));
-
-  // 🔑 aplica la limpieza de letras huérfanas en todo el texto
-  return stripDanglingInitials(t);
-}
-
-
-
-function renderAnalisisConNegritas(doc, text, x, y, maxW, opts = {}) {
-  const { size = 10.5, lineH = 16, topMargin = 40, bottomMargin = 60 } = opts;
-
-  const pageH = doc.internal.pageSize.getHeight();
-  const yLimit = pageH - bottomMargin;
-
-  const ensureInk = () => { if (doc.setTextColor) doc.setTextColor(0,0,0); };
-
-  doc.setFont('helvetica','normal');
-  doc.setFontSize(size);
-
-  // 1) Normalizador para comillas/guiones (antes de los regex)
-const QL = `[“"']`;   // abre
-const QR = `[”"']`;   // cierra
-const DASH = `[—–-]`;
-
-// 2) Áreas flexibles en EN: "&" o "and", Wellbeing / Well-being
-const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const AREAS_ES = [
-  'Propósito y estrategia',
-  'Liderazgo y gobernanza',
-  'Cultura y bienestar',
-  'Aprendizaje e innovación',
-  'Procesos y tecnología',
-  'Sostenibilidad e impacto'
+/* ====== Paleta y labels por omisión ====== */
+const PALETTE = { green:"#00A676", bar:"#F6DFA7", grid:"#EEF2F7", text:"#111" };
+const DEFAULT_LABELS_ES = [
+  ['Propósito', 'y estrategia'],
+  ['Liderazgo', 'y gobernanza'],
+  ['Cultura', 'y bienestar'],
+  ['Aprendizaje', 'e innovación'],
+  ['Procesos', 'y tecnología'],
+  ['Sostenibilidad', 'e impacto']
 ];
-const AREAS_EN_RAW = [
-  'Purpose & Strategy',
-  'Leadership & Governance',
-  'Culture & Wellbeing',
-  'Learning & Innovation',
-  'Processes & Technology',
-  'Sustainability & Impact'
-];
-const toFlexibleEN = s => esc(s)
-  .replace(/&/g, '\\s*(?:&|and)\\s*')
-  .replace(/Wellbeing/g, 'Well[- ]?being');
-const AREAS_EN_FLEX = AREAS_EN_RAW.map(toFlexibleEN);
-const AREAS_ALT = [...AREAS_ES.map(esc), ...AREAS_EN_FLEX].join('|');
-
-// 3) Patrones robustos
-const AREA_RX = new RegExp(
-  `^\\s*((?:En|In)\\s+(${AREAS_ALT}))\\s+${DASH}\\s+${QL}?([^”"']+)${QR}?\\.?\\s*(.*)$`,
-  'u'
-);
-const OPORT_RX = new RegExp(
-  `^\\s*(Oportunidades prioritarias\\.|Priority opportunities\\.)\\s*(.*)$`,
-  'u'
-);
-const FORTC_RX = new RegExp(
-  `^\\s*(Fortalezas clave\\.|Key strengths\\.)\\s*(.*)$`,
-  'u'
-);
-const FORT_AREA_RX = new RegExp(
-  `^\\s*(${AREAS_ALT})\\s+${DASH}\\s+${QL}?([^”"']+)${QR}?\\.?\\s*(.*)$`,
-  'u'
-);
-const FORTL_RX = new RegExp(
-  `^\\s*((?:Fortaleza|Strength)\\s+[–-]\\s+(${AREAS_ALT}))\\s+${DASH}\\s+${QL}?([^”"']+)${QR}?\\.?\\s*(.*)$`,
-  'u'
-);
 
 
-  // ====== Helper para imprimir etiqueta en bold + cuerpo ======
-  const drawBoldLine = (label, body) => {
-    if (y > yLimit) { doc.addPage(); ensureInk(); y = topMargin; }
-    doc.setFont('helvetica','bold');
-    const labelW = doc.getTextWidth(label);
-    const firstLineW = Math.max(0, maxW - labelW - 6);
+let chart = null;
+let lastPayload = null;
 
-    doc.setFont('helvetica','normal');
-    const firstSlice = doc.splitTextToSize(String(body || ''), firstLineW);
-    const firstLine = firstSlice.shift() || '';
+// DPI estable en HiDPI
+Chart.defaults.devicePixelRatio = () => window.devicePixelRatio || 1;
 
-    doc.setFont('helvetica','bold'); doc.text(label, x, y);
-    doc.setFont('helvetica','normal'); doc.text(firstLine, x + labelW + 6, y);
-    y += lineH;
-
-    firstSlice.forEach(line => {
-      if (y > yLimit) { doc.addPage(); ensureInk(); y = topMargin; }
-      doc.text(line, x, y);
-      y += lineH;
+// ResizeObserver para que el canvas crezca con el iframe
+let ro, rafId = 0, resizeTimer = 0;
+function mountResizeObserver() {
+  try {
+    const el = document.querySelector('.wrap');
+    if (!el) return;
+    ro?.disconnect?.();
+    ro = new ResizeObserver(() => {
+      cancelAnimationFrame(rafId);
+      clearTimeout(resizeTimer);
+      rafId = requestAnimationFrame(()=>{
+        resizeTimer = setTimeout(()=>{
+          if (chart) chart.resize();
+          else if (lastPayload) buildWhenReady(lastPayload);
+        }, 120);
+      });
     });
-    y += 8;
-  };
+    ro.observe(el);
+  } catch(_) {}
+}
+document.addEventListener('DOMContentLoaded', mountResizeObserver);
+window.addEventListener('load', mountResizeObserver);
 
-  // ====== Renderizado párrafo por párrafo ======
-  const paras = String(text).split(/\n\s*\n/);
-  for (let p of paras) {
-    p = p.trim();
-    if (!p) { y += 8; continue; }
-
-    // 1) Oportunidades prioritarias / Priority opportunities
-    let m = p.match(OPORT_RX);
-    if (m) { drawBoldLine(m[1], m[2]); continue; }
-
-    // 2) En|In <Área> — “…” (en secciones de oportunidades)
-    m = p.match(AREA_RX);
-    if (m) {
-      const etiqueta = `${m[1]} — “${m[3]}.”`;
-      const cuerpo   = m[4] || '';
-      drawBoldLine(etiqueta, cuerpo);
-      continue;
-    }
-
-    // 3) Fortalezas clave / Key strengths
-    m = p.match(FORTC_RX);
-    if (m) { drawBoldLine(m[1], m[2]); continue; }
-
-    // 4) <Área> — “…” (líneas de fortalezas por área)
-    m = p.match(FORT_AREA_RX);
-    if (m) {
-      const etiqueta = `${m[1]} — “${m[2]}.”`;
-      const cuerpo   = m[3] || '';
-      drawBoldLine(etiqueta, cuerpo);
-      continue;
-    }
-
-    // 5) (opcional) Fortaleza|Strength – <Área> — “…”
-    m = p.match(FORTL_RX);
-    if (m) {
-      const etiqueta = `${m[1]} — “${m[3]}.”`;
-      const cuerpo   = m[4] || '';
-      drawBoldLine(etiqueta, cuerpo);
-      continue;
-    }
-
-    // 6) Párrafo normal
-    const lines = doc.splitTextToSize(p, maxW);
-    for (const line of lines) {
-      if (y > yLimit) { doc.addPage(); ensureInk(); y = topMargin; }
-      doc.text(line, x, y);
-      y += lineH;
-    }
-    y += 8;
-  }
-
-  return y;
+/* ====== Helpers ====== */
+function fmtMoney(n, lang='es'){
+  try { return (n??0).toLocaleString(lang==='en'?'en-US':'es-MX',{maximumFractionDigits:0}); }
+  catch { return Math.round(n||0).toString(); }
 }
 
-// === Detección robusta del tipo de imagen según el base64 (sin header) ===
-function detectImageFormatFromBase64(b64){
-  if (!b64) return null;
-  const s = String(b64).trim().replace(/\s+/g,'');
-  // JPEG típicamente empieza con /9j/
-  if (s.startsWith('/9j/')) return 'JPEG';
-  // PNG típicamente empieza con iVBORw0KGgo
-  if (s.startsWith('iVBOR')) return 'PNG';
-  return null;
+function ensureArraysFromPayload(payload){
+  let labels = (payload.labels && payload.labels.length)
+    ? payload.labels
+    : DEFAULT_LABELS_ES;
+  labels = labels.map(l => Array.isArray(l) ? l : (l != null ? String(l) : ''));
+  // costos: aceptar array o objeto {proposito, liderazgo, ...}
+  let costosArr = [];
+  if (Array.isArray(payload.costos)) costosArr = payload.costos.map(n => Number(n||0));
+  else if (payload.costos && typeof payload.costos === 'object'){
+    const order = ['proposito','liderazgo','cultura','aprendizaje','procesos','sostenibilidad'];
+    costosArr = order.map(k => Number(payload.costos[k]||0));
+  } else costosArr = new Array(6).fill(0);
+
+  // promedios: array [1..5]
+  const promedios = Array.isArray(payload.promedios) ? payload.promedios.map(Number) : new Array(6).fill(3);
+  return {labels, costosArr, promedios};
 }
 
-// === Normaliza lo que venga (con o sin header) y devuelve {dataURL, fmt} ===
-function toDataURLAndFormat(raw, hintedFmt){
-  if (!raw) return { dataURL:null, fmt:null };
+// tasa recuperable según nivel (para la línea)
+function urgFromAvg(avg, cfg){
+  const r = (cfg?.recRates) || {};
+  if (avg<=2.0) return {tag:'En crisis',      recRate:r.crisis       ?? 0.70};
+  if (avg<=3.0) return {tag:'Desconectado',   recRate:r.desconectado ?? 0.60};
+  if (avg<=4.0) return {tag:'En transición',  recRate:r.transicion   ?? 0.45};
+  return            {tag:'Regenerativa',      recRate:r.regenerativa ?? 0.30};
+}
 
-  let s = String(raw).trim();
-  // Quita espacios y saltos que rompen el dataURL
-  s = s.replace(/\s+/g,'');
+function buildWhenReady(payload){
+  lastPayload = payload;
+  const canvas = document.getElementById('chart');
 
-  // Si ya viene como dataURL completo:
-  if (/^data:image\/(png|jpe?g);base64,/i.test(s)){
-    const fmt = /png/i.test(s) ? 'PNG' : 'JPEG';
-    return { dataURL: s, fmt };
+  function tick(){
+    const w = canvas.offsetWidth || canvas.clientWidth || 0;
+    const h = canvas.offsetHeight || canvas.clientHeight || 0;
+
+    // solo construimos cuando el iframe ya está expandido en Wix
+    if (w > 40 && h > 40) {
+      build(payload);
+    } else {
+      requestAnimationFrame(tick); // vuelve a intentar en el próximo frame
+    }
   }
 
-  // Si viene "desnudo" (solo base64): detecta formato
-  const fmt = (hintedFmt && (hintedFmt.toUpperCase()==='PNG' || hintedFmt.toUpperCase()==='JPEG'))
-    ? hintedFmt.toUpperCase()
-    : (detectImageFormatFromBase64(s) || 'JPEG'); // por defecto JPEG
-
-  const prefix = (fmt === 'PNG')
-    ? 'data:image/png;base64,'
-    : 'data:image/jpeg;base64,';
-
-  return { dataURL: prefix + s.replace(/^,+/, ''), fmt };
+  tick();
 }
 
 
 
+/* ====== Construcción del gráfico ====== */
+function build(payload){
+  const cfg = payload.config || {};
+  const {labels, costosArr, promedios} = ensureArraysFromPayload(payload);
 
+  console.debug('[COSTOS] payload recibido:', payload);
+  console.debug('[COSTOS] costosArr:', costosArr, 'promedios:', promedios);
 
-// 1. Avisar a Wix "ya estoy listo"
-window.parent.postMessage({ type: 'ready' }, "*");
+  const canvas = document.getElementById('chart');
+  if (!canvas) { console.error('[COSTOS] No se encontró #chart'); return; }
 
-// 2. Escuchar datos desde Wix
-window.addEventListener('message', async (event) => {
-  const data = event.data;
-  if (!data) return;
+  const costoTotal = Math.round(costosArr.reduce((a,b)=>a+(+b||0),0));
+  const rec = costosArr.map((c,i)=> Math.round((+c||0) * urgFromAvg(promedios[i], cfg).recRate));
+  const recTotal = Math.round(rec.reduce((a,b)=>a+b,0));
 
-  // ignorar mensajes tipo "ready" que tú mismo mandas
-  if (data.type === 'ready') return;
+  const curr = cfg.currency || 'USD';
+  const hz   = cfg.horizonte || '12–18 meses';
+  const roiMin = Number(cfg.roiMultipleMin ?? 5);
 
-  // sólo reaccionar a data válidos del diagnóstico
-  if (data.type === 'datosInforme') {
-    await generarPDFyDescargar(data);
-
-    // Avisar de éxito de generación a Wix
-    window.parent.postMessage({ type:'pdf-ok' }, '*');
+  // texto superior
+  const metaEl = document.getElementById('chartMeta');
+  if (metaEl) {
+    metaEl.textContent =
+      `Costo oculto total ≈ $${fmtMoney(costoTotal, payload.lang)} ${curr} · ` +
+      `Recuperable (${hz}): $${fmtMoney(recTotal, payload.lang)} ${curr}`;
   }
+  // límites sugeridos para que no quede en 0–1
+  const maxBar  = Math.max(...costosArr, 0);
+  const maxLine = Math.max(...rec, 0);
+  const maxY    = Math.max(maxBar, maxLine, 1);
+
+ try {
+    if (chart) chart.destroy();
+    chart = new Chart(canvas, {
+    type: 'bar',   // ← ESTA LÍNEA ES LA DIFERENCIA
+    data:{
+      labels,
+      datasets:[
+        {
+          type:'bar',
+          label: `Costo oculto (${curr})`,
+          data: costosArr,
+          backgroundColor: PALETTE.bar,
+          borderWidth: 0,
+          borderRadius: 8,
+          barThickness: 38,
+          maxBarThickness: 42
+        },
+        {
+          type:'line',
+          label: `Recuperable estimado (${curr})`,
+          data: rec,
+          borderColor: PALETTE.green,
+          pointBackgroundColor: PALETTE.green,
+          pointBorderColor: '#fff',
+          pointBorderWidth: 1,
+          pointRadius: 3,
+          pointHoverRadius: 5,
+          tension: 0.25,
+          fill: false,
+          yAxisID: 'y'
+        }
+      ]
+    },
+
+    options:{
+      responsive:true,
+      maintainAspectRatio:false,
+      normalized:true,
+      layout:{ padding:{ top: 6, right: 6, bottom: 6, left: 0 } },
+      plugins:{
+        legend:{ position:'top', labels:{ color: PALETTE.text, usePointStyle:true, boxWidth: 10 } },
+        tooltip:{
+          callbacks:{
+            label: (ctx)=>{
+              const val = ctx.raw||0;
+              return `${ctx.dataset.label}: $${fmtMoney(val, payload.lang)} USD`;
+            },
+            afterBody:(items)=>{
+              const i = items[0].dataIndex;
+              const u = urgFromAvg(promedios[i], cfg);
+              const r = rec[i]||0;
+              const pot = Math.round(r * roiMin);
+              return [
+                `Nivel: ${u.tag}`,
+                `ROI potencial (≥${roiMin}x): $${fmtMoney(pot, payload.lang)} ${curr}`
+              ];
+            }
+          }
+        }
+      },
+      scales:{
+        y:{
+          beginAtZero:true,
+          suggestedMax: Math.round(maxY * 1.15),
+          grid:{ color: PALETTE.grid },
+          ticks:{ callback:(v)=>'$'+fmtMoney(v, payload.lang)+' '+curr, precision: 0 }
+        },
+        x:{ grid:{ display:false }, ticks:{ color: PALETTE.text, maxRotation: 0, autoSkip: false } }
+      },
+      animation:{ duration: 600, easing: 'easeOutQuart' }
+    }
+  });
+  window.chart = chart;
+  try { window.parent?.postMessage({ type:'built', chart:'costos' }, '*'); } catch(_) {}
+  } catch (e){
+    console.error('[COSTOS] Error construyendo Chart:', e);
+  }
+}
+
+function getChartPNG() {
+  try {
+    const src = document.getElementById('chart');
+    // lienzo temporal del mismo tamaño
+    const tmp = document.createElement('canvas');
+    tmp.width  = src.width  || 980;
+    tmp.height = src.height || 540;
+    const ctx = tmp.getContext('2d', { willReadFrequently: true });
+
+    // fondo blanco para evitar el “negro”
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, tmp.width, tmp.height);
+    ctx.drawImage(src, 0, 0);
+
+    // sigue siendo JPEG (fondo ya blanco)
+    const dataURL = tmp.toDataURL('image/jpeg', 0.92);
+    return { dataURL, w: tmp.width, h: tmp.height, mime: 'image/jpeg', fmt: 'JPEG' };
+  } catch (e) {
+    return { dataURL: null, w:0, h:0, error: e?.message || String(e), fmt: 'JPEG' };
+  }
+}
+
+
+
+
+/*function getChartPNG() {
+  try {
+    if (window.chart && typeof window.chart.toBase64Image === 'function') {
+      const dataURL = window.chart.toBase64Image('image/png', 1.0);
+      const w = window.chart?.canvas?.width  || 980;
+      const h = window.chart?.canvas?.height || 540;
+      return { dataURL, w, h };
+    }
+    const canvas = document.getElementById('chart');
+    if (canvas && canvas.toDataURL) {
+      const dataURL = canvas.toDataURL('image/png', 1.0);
+      return { dataURL, w: canvas.width || 980, h: canvas.height || 540 };
+    }
+    return { dataURL: null, w: 0, h: 0, error: 'No chart/canvas available' };
+  } catch(e) {
+    return { dataURL: null, w: 0, h: 0, error: e?.message || String(e) };
+  }
+}*/
+
+
+
+/* ====== Handshake con Velo ====== */
+window.addEventListener('load', () => {
+  window.parent?.postMessage({ type: 'ready', chart: 'costos' }, '*');
 });
 
-
-
-
-
-async function generarPDFyDescargar(data){
-  const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({
-    unit: 'pt',   // puntos
-    format: 'letter' // o 'a4', según tu pdf original
-  });
-
-  if (doc.setTextColor) doc.setTextColor(0,0,0);
-
-  // Margenes básicos
-  const M_LEFT = 40;
-  const M_TOP  = 40;
-  let y = M_TOP;
-
-  // ============ PORTADA / PÁGINA 1 ============
-
-  // Branding arriba derecha
-  doc.setFont('helvetica','normal');
-  doc.setFontSize(8);
-  doc.text('Innovación Regenerativa | Informe diagnóstico', 400, y);
-  y = bump(y, GAP.lg);       
-
-  // Título
-  doc.setFontSize(16);
-  doc.setFont('helvetica','bold');
-  doc.text(
-    data.idioma === 'en'
-      ? 'ORGANIZATIONAL DIAGNOSTIC REPORT'
-      : 'INFORME DIAGNÓSTICO ORGANIZACIONAL',
-    M_LEFT,
-    y
-  );
-  y = bump(y, GAP.lg);       
-
-
-  // Subtítulo institucional
-    doc.setFont('helvetica','bold');
-    doc.setFontSize(14);
-    doc.text('Innovación Regenerativa', M_LEFT, y);
-   y = bump(y, GAP.md);       // antes y += 20
-
-
-  // Subtítulo
-  doc.setFontSize(11);
-  doc.setFont('helvetica','normal');
-  y += 4;
-   doc.text(
-    splitLines(
-      doc,
-      data.idioma === 'en'
-        ? 'A starting point to align purpose, energy, and outcomes in your organization'
-        : 'Un punto de partida para alinear propósito, energía y resultados en tu organización',
-      520
-    ),
-    M_LEFT,
-    y
-  );
- y = bump(y, GAP.lg);
-
-
-  // Bloque de datos del usuario/empresa
-
-doc.setFontSize(10.5); // un poco más grande
-const labelFont = 'helvetica';
-const valueFont = 'helvetica';
-
-// Línea 1: Nombre + Empresa
-doc.setFont(labelFont, 'bold');
-doc.text(data.idioma === 'en' ? 'Name:' : 'Nombre:', M_LEFT, y);
-doc.setFont(valueFont, 'normal');
-doc.text(`${data.nombre} ${data.apellido}`, M_LEFT + 55, y);
-
-doc.setFont(labelFont, 'bold');
-doc.text(data.idioma === 'en' ? 'Organization:' : 'Empresa:', M_LEFT + 220, y);
-doc.setFont(valueFont, 'normal');
-doc.text(data.empresa, M_LEFT + 300, y);
-y = bump(y, GAP.lg);
-
-// Línea 2: Puesto + País
-doc.setFont(labelFont, 'bold');
-doc.text(data.idioma === 'en' ? 'Role:' : 'Puesto:', M_LEFT, y);
-doc.setFont(valueFont, 'normal');
-doc.text(data.puesto, M_LEFT + 45, y);
-
-doc.setFont(labelFont, 'bold');
-doc.text(data.idioma === 'en' ? 'Country:' : 'País:', M_LEFT + 220, y);
-doc.setFont(valueFont, 'normal');
-doc.text(data.pais || '', M_LEFT + 260, y);
-y = bump(y, GAP.lg);
-
-// Línea 3: Fecha
-doc.setFont(labelFont, 'bold');
-doc.text(data.idioma === 'en' ? 'Date:' : 'Fecha:', M_LEFT, y);
-doc.setFont(valueFont, 'normal');
-doc.text(data.fecha, M_LEFT + 40, y);
-y = bump(y, GAP.lg);
-
-
-
-  // Frase inspiradora
-  doc.setFont('helvetica','italic');
-  doc.setFontSize(13);
-  const frase = (data.idioma === 'en')
-    ? 'We cannot impose regeneration; we can only create the conditions for it to emerge.'
-    : 'No podemos imponer la regeneración, solo podemos crear las condiciones para que emerja.';
-  y = drawParagraph(doc, `"${frase}"`, M_LEFT, y, 520, "helvetica", "italic", 9.5, 12, 0);
+/* ====== Listener para recibir datos ====== */
+window.addEventListener('message', (ev)=>{
+  if (!ev || !ev.data) return;
+  // Si no viene origin (p.ej. entornos de prueba), no bloquees; o mantén tu whitelist:
+  if (ev.origin && !originPermitido(ev.origin)) return;
   
-  doc.setFont('helvetica','normal');
-  doc.setFontSize(11);
-  doc.text('Regenesis Group', M_LEFT, y + 8);
-  y = bump(y, GAP.xl);
+  const d = ev?.data ?? {};
 
+    // 1) Cargar/actualizar la gráfica
+    if (d.type === 'costos' || Array.isArray(d.costos) || (d.costos && typeof d.costos === 'object')) {
+      lastPayload = d;
+      buildWhenReady(d);
 
-  // Bloque estado general
-  doc.setFont('helvetica','bold');
-  doc.setFontSize(12);
-  doc.text(
-    data.idioma === 'en'
-      ? 'Organizational status'
-      : 'Nivel general organizacional',
-    M_LEFT, y
-  );
-  y = bump(y, GAP.md);
+      // auto-snapshot opcional: si Velo manda autosnap:true, devolvemos imagen al terminar
+      if (d.autosnap) {
+        setTimeout(() => {
+          const snap = getChartPNG();
+          window.parent?.postMessage({ type:'snapshot-ok', chart: d.chart || 'costos', ...snap }, '*');
+        }, 60);
+      }
+      return;
+    }
+
+    // 2) Petición explícita de snapshot
+    if (d.type === 'snapshot' || d.type === 'get-snapshot') {
+    const snap = getChartPNG();
+    window.parent?.postMessage({ type:'snapshot-ok', chart: d.chart || 'costos', ...snap }, '*');
+    return;
+    }
+
 
 
   
-
-  // Insight / lectura humana
-    doc.setFont('helvetica','normal');
-    doc.setFontSize(10); // antes era 9
-    const insight = data.insightNivel || '';
-    const insightLines = splitLines(doc, insight, 520);
-    y = drawParagraph(doc, insight, M_LEFT, y, 520, 'helvetica', 'normal', 11, 16, GAP.sm);
-
-
-
-    // ---- Caja gris de MÉTRICAS (Promedio, Nivel, Costo total, ROI/Recuperable) ----
-    const lang = data.idioma === 'en' ? 'en' : 'es';
-
-    // Si aún no tienes “rows” construidas aquí, calcula el recuperable total a partir de las áreas:
-    const NOMBRES_ES = { proposito:'Propósito y estrategia', liderazgo:'Liderazgo y gobernanza', cultura:'Cultura y bienestar', aprendizaje:'Aprendizaje e innovación', procesos:'Procesos y tecnología', sostenibilidad:'Sostenibilidad e impacto' };
-    const NOMBRES_EN = { proposito:'Purpose & Strategy', liderazgo:'Leadership & Governance', cultura:'Culture & Wellbeing', aprendizaje:'Learning & Innovation', procesos:'Processes & Technology', sostenibilidad:'Sustainability & Impact' };
-
-    // Calcula recuperable total (ya lo tenías)
-    /*let recuperableTotalN = 0;
-    (data.areasDetalle || []).forEach(a => {
-    const avg = Number(a.promedio || 0);
-    const costN = moneyToNumber(a.costoUSD);
-    const rate  = recRateFromScore(avg);
-    recuperableTotalN += Math.round(costN * rate);
-    });*/
-
-// ===== Resumen ejecutivo con interpretación (antes de "Nivel general organizacional") =====
-
-// Recuperable total (mismo cálculo que usas después)
-    let recTotalNum = 0;
-    (data.areasDetalle || []).forEach(a=>{
-    const avg  = Number(a.promedio || 0);
-    const cost = moneyToNumber(a.costoUSD);
-    recTotalNum += Math.round(cost * recRateFromScore(avg));
-    });
-
-    {
-  const pageH  = doc.internal.pageSize.getHeight();
-  const bottom = 60;
-  const needH  = 120; // alto mínimo estimado del bloque
-  if (y + needH > pageH - bottom) { doc.addPage(); if (doc.setTextColor) doc.setTextColor(0,0,0); y = M_TOP; }
-
-  // marco de depuración (temporal)
-  //doc.setDrawColor(220); 
-  //doc.rect(M_LEFT - 4, y, 520, 100); // caja de guía para ver dónde cae el bloque
-}
-
-
-    // Dibuja el bloque
-    y = drawExecutiveSummary(doc, {
-    x: M_LEFT - 4,
-    y,
-    w: 520,
-    lang: (data.idioma === 'en' ? 'en' : 'es'),
-    nivelGeneral: data.nivelGeneral,
-    promedioGeneral: data.promedioGeneral,   // <<—— NUEVO
-    costoTotalStr: data.costoTotalUSD,
-    recTotalNum
-    });
-   y = bump(y, GAP.xs);
-
-
-    doc.setFontSize(11);
-    const recoLabel = (data.idioma === 'en') ? 'Key recommendation:' : 'Recomendación clave:';
-    const recoBody  = (data.idioma === 'en')
-    ? ' Focus leadership attention on the 2–3 lowest scoring areas and link fixes to strategic purpose. Disconnection is expensive — and reversible.'
-    : ' Poner en agenda de liderazgo las 2–3 áreas con menor puntaje y vincular su mejora al propósito estratégico. La desconexión es costosa, pero reversible.';
-
-    // Título “Recomendación” no hace falta; imprime directamente la línea compuesta:
-    doc.setFontSize(10);
-    y = drawBoldLabelThenText(doc, recoLabel, recoBody, M_LEFT, y, 520, 6, 10, 12);
-   y = bump(y, GAP.md);
-
-
-  // Tabla resumen por dimensión
-  doc.setFont('helvetica','bold');
-  doc.setFontSize(11);
-  doc.text(
-    data.idioma==='en'
-      ? 'Results by dimension'
-      : 'Resultados por dimensión',
-    M_LEFT,
-    y
-  );
-  y = bump(y, GAP.md);
-
-
-  // ===== Construcción de filas para la tabla (usa data.areasDetalle ya enviado desde Velo) =====
-   
-
-    // Normalizamos filas con ROI
-    const rows = (data.areasDetalle || []).map(a => {
-    const label = (lang==='en' ? NOMBRES_EN[a.areaKey] : NOMBRES_ES[a.areaKey]) || a.areaKey;
-    const avg   = Number(a.promedio || 0);
-    const costN = moneyToNumber(a.costoUSD);             // número
-    const rate  = recRateFromScore(avg);                 // 0.70 / 0.60 / 0.45 / 0.30
-    const rec   = Math.round(costN * rate);              // recuperable potencial
-    const inv   = Math.max(1, Math.round(rec / (CONFIG_ROI.roiMultipleMin||5))); // inversión estimada p/≥5x
-    const roiX  = (rec>0 && inv>0) ? (rec/inv) : CONFIG_ROI.roiMultipleMin;
-
-    return {
-        name: label,
-        avg: avg.toFixed(1),
-        costStr: fmtMoney(costN, lang),                // "$16,800 USD"
-        roiStr: fmtMoney(rec, lang)    // solo el monto recuperable potencial
-        // si prefieres explicitar inversión: `${fmtMoney(rec, lang)} (inv. ~${fmtMoney(inv, lang)} → ≥${CONFIG_ROI.roiMultipleMin}x)`
-    };
-    });
-
-    // Dibujar tabla
-    y = drawResultsTable(doc, { lang, x: M_LEFT, y, w: 520 }, rows);
-
-    // === Bloque final: Costo oculto + Recuperable (mantener juntas) ===
-    const totalLinea = (
-    lang==='en'
-        ? `Estimated hidden cost: ${data.costoTotalUSD} per year.`
-        : `Costo oculto estimado: ${data.costoTotalUSD} al año.`
-    );
-
-    const recBlockNum = rows.reduce((acc, r) => acc + moneyToNumber(r.roiStr), 0); // ya lo calculaste arriba; usa ese si lo prefieres
-    const recLinea = (
-    lang==='en'
-        ? `Recoverable (potential): ${fmtMoney(recBlockNum, lang)}.`
-        : `Recuperable (potencial): ${fmtMoney(recBlockNum, lang)}.`
-    );
-
-    // Medimos líneas para evitar corte
-    doc.setFont('helvetica','bold'); doc.setFontSize(10);
-    const l1 = doc.splitTextToSize(totalLinea, 520);
-    const l2 = doc.splitTextToSize(recLinea, 520);
-    const pageH2 = doc.internal.pageSize.getHeight();
-    const bottom = 60;
-    const needH = l1.length*12 + l2.length*12 + 10; // 10pt de separación interna
-
-    if (y + needH > pageH2 - bottom) {
-    doc.addPage();
-    if (doc.setTextColor) doc.setTextColor(0,0,0);
-    y = M_TOP;
-    }
-
-    // Imprime bloque
-    l1.forEach(line => { doc.text(line, M_LEFT, y); y += 12; });
-    y += 4; // separación corta
-    l2.forEach(line => { doc.text(line, M_LEFT, y); y += 12; });
-    y += 8; // pequeño margen después del bloque
-
-
-    // Línea “Costo oculto estimado” (abajo de la tabla)
-    /*const totalLinea = (
-    lang==='en'
-        ? `Estimated hidden cost: ${data.costoTotalUSD} per year.`
-        : `Costo oculto estimado: ${data.costoTotalUSD} al año.`
-    );
-    doc.setFont('helvetica','bold'); doc.setFontSize(10);
-    y = drawParagraph(doc, totalLinea, M_LEFT, y, 520, 'helvetica', 'bold', 10, 12, 3);
-    y = bump(y, GAP.xs);
-
-
-
-    const recLinea = (
-    lang==='en'
-        ? `Recoverable (potential): ${fmtMoney(recTotalNum, lang)}.`
-        : `Recuperable (potencial): ${fmtMoney(recTotalNum, lang)}.`
-    );
-    doc.setFont('helvetica','bold'); doc.setFontSize(10);
-    y = drawParagraph(doc, recLinea, M_LEFT, y, 520, 'helvetica', 'bold', 10, 12, 8);
-    y = bump(y, GAP.sm);
-
-
-
-  // Footer de página
-  const pageH = doc.internal.pageSize.getHeight();  // obtiene la altura total del PDF
-    doc.setFontSize(8);
-    doc.setFont('helvetica','normal');
-    doc.text(
-    data.idioma==='en' ? 'Page 1' : 'Página 1',
-    520,           // posición X (derecha)
-    pageH - 32     // posición Y (32pt desde el borde inferior)
-    );*/
-
-
-
-
-  // ============ PÁGINA 2: Retos / Fortalezas / Acciones clave ============
-  doc.addPage();
-  y = M_TOP;
-
-  // 🔒 Forzar espaciados a 0
-//if (doc.setCharSpace)  doc.setCharSpace(0);
-//if (doc.setWordSpace)  doc.setWordSpace(0);  // algunas builds lo exponen
-// (opcional) doc.setGState(new doc.GState({ charSpace: 0, wordSpace: 0 })); // si tu build lo permite
-
-const resumenLimpio = stripDanglingInitials(
-  normalizeText(
-    limpiarHTML(data.analisisNivel)
-  )
-);
-
-
-
-  doc.setFont('helvetica','bold');
-  doc.setFontSize(12);
-  doc.text(
-    data.idioma==='en'
-      ? 'Priority tensions and opportunities'
-      : 'Tensiones prioritarias y oportunidades',
-    M_LEFT, y
-  );
-  y+=26;
-
-    // título ya lo dejaste puesto arriba; ahora el cuerpo:
-    y = renderAnalisisConNegritas(doc, resumenLimpio, M_LEFT, y, 520, {
-  size: 10.5, lineH: 16, topMargin: M_TOP, bottomMargin: 60
-   });
-
-   y = drawCostChartIfAny(doc, data, M_LEFT, y, 520);
-
-// === SECCIÓN: Gráfica de Costos Ocultos y ROI (usa la imagen enviada desde Velo) ===
-/*try {
-  const maxW = doc.internal.pageSize.getWidth() - (M_LEFT*2);
-  const maxH = 260;        // alto máximo sugerido
-  const raw   = data?.imagenes?.costos || null;         // puede venir con o sin dataURL
-  const hintedFmt = data?.imagenes?.costosFmt || null;  // "PNG" | "JPEG" (si llegó)
-  const w0 = Number(data?.imagenes?.costosW || 0);      // ancho real del canvas (si llegó)
-  const h0 = Number(data?.imagenes?.costosH || 0);      // alto real del canvas (si llegó)
-
-  const { dataURL, fmt } = toDataURLAndFormat(raw, hintedFmt); // NORMALIZA
-
-  if (dataURL){
-    // Título
-    y = bump(y, GAP.md);
-    doc.setFont('helvetica','bold'); doc.setFontSize(12);
-    doc.text(
-      (data.idioma==='en' ? 'Hidden Costs & Potential ROI' : 'Costos ocultos y ROI potencial'),
-      M_LEFT, y
-    );
-    y = bump(y, GAP.sm);
-
-    // Mantener relación de aspecto si tenemos medidas reales
-    let drawW = maxW, drawH = maxH;
-    if (w0 > 0 && h0 > 0){
-      const r = Math.min(maxW / w0, maxH / h0);
-      drawW = Math.max(50, Math.round(w0 * r));
-      drawH = Math.max(50, Math.round(h0 * r));
-    }
-
-    // Salto si no cabe
-    const pageH  = doc.internal.pageSize.getHeight();
-    const bottom = 60;
-    if (y + drawH + 16 > pageH - bottom){
-      doc.addPage();
-      if (doc.setTextColor) doc.setTextColor(0,0,0);
-      y = M_TOP;
-    }
-
-    // Centrar horizontalmente
-    const xImg = M_LEFT + Math.max(0, (maxW - drawW) / 2);
-
-    // ADD IMAGE (usa formato detectado o insinuado)
-    const jsPdfFmt = (fmt === 'PNG') ? 'PNG' : 'JPEG';
-    doc.addImage(dataURL, jsPdfFmt, xImg, y, drawW, drawH);
-
-    y += drawH + GAP.sm;
-
-    // Nota breve
-    doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
-    const nota = (data.idioma==='en')
-      ? 'Gray bars: current hidden cost by dimension. Green line: realistically recoverable portion if that dimension is prioritized in 12–18 months.'
-      : 'Barras grises: costo oculto actual por dimensión. Línea verde: porción recuperable si se prioriza esa dimensión en 12–18 meses.';
-    const lines = doc.splitTextToSize(nota, maxW);
-    doc.text(lines, M_LEFT, y);
-    y = bump(y, GAP.md);
-  }
-} catch(e){
-  // no detengas el PDF si falla la imagen
-  console.warn('No se pudo dibujar la gráfica de costos/ROI:', e);
-}*/
-
-
-
-
-
-
-   
-   
-   
-   /* if (data.imagenes?.costos) {
-        const pageW = doc.internal.pageSize.getWidth();
-        const pageH = doc.internal.pageSize.getHeight();
-        const left  = 40, right = 40, top = 40, bottom = 60;
-
-        //const top   = 40;   // mismo margen superior que usas
-        //const bottom= 60;   // mismo margen inferior que usas
-        const maxW  = Math.min(520, pageW - left - right);
-        let imgW = maxW;
-        let imgH = Math.round(maxW * 9/16);
-
-        const srcW = Number(data.imagenes.costosW || 0);
-        const srcH = Number(data.imagenes.costosH || 0);
-        if (srcW > 0 && srcH > 0){
-            const ar = srcW / srcH;           // p.ej. 800/400 = 2.0
-            imgH = Math.round(imgW / ar);     // ← altura real para ese ancho
-        }
-
-        if (y + imgH > pageH - bottom) { doc.addPage(); y = top; }
-        doc.addImage(data.imagenes.costos, 'PNG', left, y, imgW, imgH);
-        y += imgH + 12;
-        }*/
-
-        // ⬇️ si no cabe, manda a la página siguiente
-        /*if (y + imgH > pageH - bottom) { 
-            doc.addPage(); 
-            y = top; 
-        }
-
-        doc.addImage(data.imagenes.costos, 'PNG', 40, y, maxW, imgH);
-        y += imgH + 12;
-        }*/
-
-       /* if (data.imagenes?.desconexion) {
-        const pageW = doc.internal.pageSize.getWidth();
-        const maxW  = Math.min(520, pageW - 2*40);
-        const imgH  = Math.round(maxW * 9/16);
-        const pageH = doc.internal.pageSize.getHeight();
-        // salto de página si no cabe
-        if (y + imgH > pageH - 60) { doc.addPage(); y = 40; }
-        doc.addImage(data.imagenes.desconexion, 'PNG', 40, y, maxW, imgH);
-        y += imgH + 12;
-        }*/
-
-
-  // El campo analisisNivel es la narrativa larga que tú armaste (parts.htmlFull),
-  // que incluye retos prioritarios, fortalezas, % de costo, recomendación.
-  // Lo vamos a volcar aquí como texto multilinea:
-  /*doc.setFont('helvetica','normal');
-  doc.setFontSize(9);
-  const analisisLines = splitLines(doc, limpiarHTML(data.analisisNivel), 520);
-  // Vamos dibujando línea por línea y saltando de página si se llena
-  for (let i=0; i<analisisLines.length; i++){
-    if (y > 760){
-      doc.addPage();
-      y = M_TOP;
-      doc.setFont('helvetica','normal');
-      doc.setFontSize(9);
-    }
-    doc.text(analisisLines[i], M_LEFT, y);
-    y+=12;
+  /*const d = ev.data || {};
+  if (d.type==='costos' || Array.isArray(d.costos) || (d.costos&& typeof d.costos==='object')) {
+    buildWhenReady(d);
+  } else if (Array.isArray(d)) {
+    buildWhenReady({ costos:d, promedios:new Array(d.length).fill(3), labels:DEFAULT_LABELS_ES, lang:'es' });
+  } else if (d.type === 'snapshot') {
+    const snap = getChartPNG();
+    window.parent?.postMessage({ type:'snapshot-ok', chart:d.chart||'costos', ...snap }, '*');
   }*/
+});
 
-  // descarga
-  const fileName = generarNombreArchivo(data);
-  doc.save(fileName);
-}
-
-// Helpers para formatear texto:
-function splitLines(doc, text, maxWidth){
-  if (!text) return [''];
-  // jsPDF 2.5: splitTextToSize
-  return doc.splitTextToSize(String(text), maxWidth);
-}
-
-function limpiarHTML(htmlString){
-  if (!htmlString) return '';
-  return String(htmlString)
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n\n')
-    // Elimina inline tags SIN insertar espacios que queden flotando
-    .replace(/<\/?(strong|em|b|i|u|span)\b[^>]*>/gi, '')
-    // Elimina el resto de etiquetas
-    .replace(/<[^>]+>/g, '')
-    // Sustitutos seguros
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/[ \t]{2,}/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-function stripDanglingInitials(s){
-  // quita letra huérfana al inicio de línea O tras punto/salto
-  return String(s)
-    // inicio de línea
-    .replace(/(^|\n)\s*[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]\s+(?=\p{L})/gu, '$1')
-    // después de punto o dos puntos
-    .replace(/([.:])\s*[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]\s+(?=\p{L})/gu, '$1 ');
-}
-
-
-function drawCostChartIfAny(doc, data, x, y, maxWidthPT) {
-  try {
-    const raw     = data?.imagenes?.costos || '';
-    const hinted  = data?.imagenes?.costosFmt || null; // si no lo mandas, no pasa nada
-    const srcW    = Number(data?.imagenes?.costosW || 0) || 1644;
-    const srcH    = Number(data?.imagenes?.costosH || 0) || 1024;
-
-    const { dataURL, fmt } = toDataURLAndFormat(raw, hinted);
-    if (!dataURL) return y; // nada que dibujar
-
-    const pageW  = doc.internal.pageSize.getWidth();
-    const pageH  = doc.internal.pageSize.getHeight();
-    const bottom = 60;
-
-    const drawW  = Math.min(maxWidthPT, pageW - x - 40);
-    const aspect = (srcW > 0 && srcH > 0) ? (srcH/srcW) : (9/16);
-    const drawH  = Math.round(drawW * aspect);
-
-    // Reservas (título + imagen + nota)
-    const titulo = (data?.idioma === 'en')
-      ? 'Hidden Costs & Recoverable ROI'
-      : 'Costos ocultos & ROI recuperable';
-
-    const note   = (data?.idioma === 'en')
-      ? 'Bars: hidden cost by dimension · Line: realistically recoverable portion (12–18 months).'
-      : 'Barras: costo oculto por dimensión · Línea: porcentaje recuperable (12–18 meses).';
-
-    doc.setFont('helvetica','bold'); doc.setFontSize(13);
-    const noteLines = doc.splitTextToSize(note, drawW);
-    const needH = 20 + drawH + (noteLines.length*12 + 6) + 6;
-
-    if (y + needH > pageH - bottom){
-      doc.addPage();
-      if (doc.setTextColor) doc.setTextColor(0,0,0);
-      y = 40;
-    }
-
-    // Título
-    doc.text(titulo, x, y);
-    y += 20;
-
-    // Imagen (usa el fmt REAL)
-    doc.addImage(dataURL, fmt || 'JPEG', x, y, drawW, drawH);
-    y += drawH + 10;
-
-    // Nota
-    doc.setFont('helvetica','normal'); doc.setFontSize(10);
-    doc.text(noteLines, x, y);
-    y += (noteLines.length*12 + 6);
-
-    return y;
-  } catch (e) {
-    console.warn('[PDF] Error al dibujar gráfica de costos:', e);
-    return y;
-  }
-}
-
-
-
-// Genera nombre de archivo final
-function generarNombreArchivo(data){
-  const nom   = (data.nombre  || '').trim().replace(/\s+/g,'_');
-  const emp   = (data.empresa || '').trim().replace(/\s+/g,'_');
-  const fecha = (data.fecha   || '').replace(/[^\d-]/g,'_');
-  return `Diagnostico_${nom}_${emp}_${fecha}.pdf`;
-}
+/* ====== Render inicial (sin datos) ====== */
+buildWhenReady({ costos:[0,0,0,0,0,0], promedios:[3,3,3,3,3,3], labels:DEFAULT_LABELS_ES, lang:'es' });
 </script>
-</body>
-</html>
+
+</body></html>
