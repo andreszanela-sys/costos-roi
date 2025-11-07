@@ -334,12 +334,11 @@ window.addEventListener('message', (ev)=>{
 
     // 2) Petición explícita de snapshot
     if (d.type === 'snapshot' || d.type === 'get-snapshot') {
-      const snap = getChartPNG();
-      // debug útil para verificar el prefijo:
-      console.debug('[SNAP head]', (snap.dataURL || '').slice(0, 22)); // debe empezar con "data:image/"
-      window.parent?.postMessage({ type:'snapshot-ok', chart: d.chart || 'costos', ...snap }, '*');
-      return;
+    const snap = getChartPNG();
+    window.parent?.postMessage({ type:'snapshot-ok', chart: d.chart || 'costos', ...snap }, '*');
+    return;
     }
+
 
 
   
