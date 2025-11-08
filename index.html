@@ -280,19 +280,24 @@ function build(payload){
     }
   });
   window.chart = chart;
-//try { window.parent?.postMessage({ type:'built', chart:'costos' }, '*'); } catch(_) {}
+
 
 // Si quieres mantener animación visual pero avisar justo al final:
 if (chart?.options?.animation) {
   const prev = chart.options.animation.onComplete;
   chart.options.animation.onComplete = (ctx) => {
     try { prev?.(ctx); } catch(_) {}
+    // ✅ avisa al padre que la gráfica ya está “construida”
+    try { window.parent?.postMessage({ type:'built', chart:'costos' }, '*'); } catch(_) {}
     notifyCostosReady();
   };
 } else {
   // fallback por si alguien quita la animación en el futuro
+  try { window.parent?.postMessage({ type:'built', chart:'costos' }, '*'); } catch(_) {}
   requestAnimationFrame(() => notifyCostosReady());
 }
+
+  try { window.parent?.postMessage({ type:'built', chart:'costos' }, '*'); } catch(_) {}
 
   } catch (e){
     console.error('[COSTOS] Error construyendo Chart:', e);
