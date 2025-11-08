@@ -147,6 +147,34 @@ function buildWhenReady(payload){
 }
 
 
+function notifyCostosReady() {
+  const snap = getChartPNG();                 // usa tu función existente
+  if (snap && snap.dataURL) {
+    window.parent?.postMessage({
+      type: 'costos-ready',                   // 🔑 lo que espera tu padre
+      png:  snap.dataURL,                     // data:image/jpeg;base64,...
+      w:    snap.w,
+      h:    snap.h,
+      fmt:  snap.fmt || 'JPEG'
+    }, '*');
+  } else {
+    // opcional: reintenta una vez si salió “PENDING” (todo blanco)
+    setTimeout(() => {
+      const again = getChartPNG();
+      if (again && again.dataURL) {
+        window.parent?.postMessage({
+          type: 'costos-ready',
+          png:  again.dataURL,
+          w:    again.w,
+          h:    again.h,
+          fmt:  again.fmt || 'JPEG'
+        }, '*');
+      }
+    }, 120);
+  }
+}
+
+
 
 /* ====== Construcción del gráfico ====== */
 function build(payload){
@@ -252,11 +280,27 @@ function build(payload){
     }
   });
   window.chart = chart;
-  try { window.parent?.postMessage({ type:'built', chart:'costos' }, '*'); } catch(_) {}
+//try { window.parent?.postMessage({ type:'built', chart:'costos' }, '*'); } catch(_) {}
+
+// Si quieres mantener animación visual pero avisar justo al final:
+if (chart?.options?.animation) {
+  const prev = chart.options.animation.onComplete;
+  chart.options.animation.onComplete = (ctx) => {
+    try { prev?.(ctx); } catch(_) {}
+    notifyCostosReady();
+  };
+} else {
+  // fallback por si alguien quita la animación en el futuro
+  requestAnimationFrame(() => notifyCostosReady());
+}
+
   } catch (e){
     console.error('[COSTOS] Error construyendo Chart:', e);
   }
 }
+
+
+
 
 function getChartPNG() {
   try {
