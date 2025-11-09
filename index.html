@@ -7,14 +7,14 @@
   :root { color-scheme: light; }
   html, body { height: 100%; margin: 0; }
   body{ background:#fff; font-family:Inter,system-ui,Arial; }
-.wrap{
-  box-sizing:border-box;
-  padding:10px 12px;
-  height:100%;                 /* ocupa todo el alto del iframe */
-  display:grid;
-  grid-template-rows:auto auto 1fr;  /* título, meta, canvas crece */
-  gap:8px;
-}
+  .wrap{
+    box-sizing:border-box;
+    padding:10px 12px;
+    height:100%;                 /* ocupa todo el alto del iframe */
+    display:grid;
+    grid-template-rows:auto auto minmax(420px,1fr);
+    gap:8px;
+  }
 
   h3{margin:0;font-size:16px;font-weight:600;color:#111}
   .meta{font-size:12px;color:#444}
@@ -30,11 +30,9 @@
 <div class="wrap">
   <h3>Costos Ocultos & ROI recuperable</h3>
   <div class="meta" id="chartMeta"></div>
-  <canvas id="chart"
-  width="800"
-  height="400"
-  style="width:100%;height:100%;display:block;"
-  ></canvas>
+
+  <canvas id="chart" style="width:100%;height:100%;display:block;"></canvas>
+
 </div>
 
 
@@ -148,6 +146,39 @@ function buildWhenReady(payload){
 
 
 function notifyCostosReady() {
+  const snap = getChartPNG();
+  if (snap && snap.dataURL) {
+    window.parent?.postMessage({
+      type: 'costos-ready',
+      imagenes: {
+        costos:    snap.dataURL,   // data:image/jpeg;base64,...
+        costosW:   snap.w,
+        costosH:   snap.h,
+        costosFmt: snap.fmt        // 'JPEG'
+      }
+    }, '*');
+  } else {
+    // reintento breve por si aún no terminó de pintar
+    setTimeout(() => {
+      const again = getChartPNG();
+      if (again && again.dataURL) {
+        window.parent?.postMessage({
+          type: 'costos-ready',
+          imagenes: {
+            costos:    again.dataURL,
+            costosW:   again.w,
+            costosH:   again.h,
+            costosFmt: again.fmt
+          }
+        }, '*');
+      }
+    }, 120);
+  }
+}
+
+
+
+/*function notifyCostosReady() {
   const snap = getChartPNG();                 // usa tu función existente
   if (snap && snap.dataURL) {
     window.parent?.postMessage({
@@ -172,7 +203,7 @@ function notifyCostosReady() {
       }
     }, 120);
   }
-}
+}*/
 
 
 
@@ -206,6 +237,20 @@ function build(payload){
   const maxBar  = Math.max(...costosArr, 0);
   const maxLine = Math.max(...rec, 0);
   const maxY    = Math.max(maxBar, maxLine, 1);
+
+  const backgroundFillPlugin = {
+    id: 'backgroundFill',
+    beforeDraw(chart) {
+      const { ctx, chartArea } = chart;
+      if (!chartArea) return;
+      const { left, top, width, height } = chartArea;
+      ctx.save();
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(left, top, width, height);
+      ctx.restore();
+    }
+  };
+
 
  try {
     if (chart) chart.destroy();
@@ -247,12 +292,14 @@ function build(payload){
       normalized:true,
       layout:{ padding:{ top: 6, right: 6, bottom: 6, left: 0 } },
       plugins:{
+
         legend:{ position:'top', labels:{ color: PALETTE.text, usePointStyle:true, boxWidth: 10 } },
         tooltip:{
           callbacks:{
             label: (ctx)=>{
               const val = ctx.raw||0;
-              return `${ctx.dataset.label}: $${fmtMoney(val, payload.lang)} USD`;
+              return `${ctx.dataset.label}: $${fmtMoney(val, payload.lang)} ${curr}`;
+              //return `${ctx.dataset.label}: $${fmtMoney(val, payload.lang)} USD`;
             },
             afterBody:(items)=>{
               const i = items[0].dataIndex;
@@ -297,7 +344,7 @@ if (chart?.options?.animation) {
   requestAnimationFrame(() => notifyCostosReady());
 }
 
-  try { window.parent?.postMessage({ type:'built', chart:'costos' }, '*'); } catch(_) {}
+  //try { window.parent?.postMessage({ type:'built', chart:'costos' }, '*'); } catch(_) {}
 
   } catch (e){
     console.error('[COSTOS] Error construyendo Chart:', e);
@@ -305,9 +352,29 @@ if (chart?.options?.animation) {
 }
 
 
-
-
 function getChartPNG() {
+  try {
+    if (window.chart && typeof window.chart.toBase64Image === 'function') {
+      const dataURL = window.chart.toBase64Image('image/jpeg', 0.92); // JPEG liviano
+      const w = window.chart?.canvas?.width  || 980;
+      const h = window.chart?.canvas?.height || 540;
+      return { dataURL, w, h, fmt: 'JPEG' };
+    }
+    const cv = document.getElementById('chart');
+    if (cv?.toDataURL) {
+      return { dataURL: cv.toDataURL('image/jpeg', 0.92), w: cv.width, h: cv.height, fmt:'JPEG' };
+    }
+    return { dataURL:null, w:0, h:0, fmt:'ERROR' };
+  } catch (e) {
+    return { dataURL:null, w:0, h:0, fmt:'ERROR' };
+  }
+}
+
+
+
+
+
+/*function getChartPNG() {
   try {
     const src = document.getElementById('chart');
 
@@ -343,7 +410,7 @@ function getChartPNG() {
   } catch (e) {
     return { dataURL: null, w:0, h:0, error: e?.message || String(e), fmt: 'ERROR' };
   }
-}
+}*/
 
 
 
