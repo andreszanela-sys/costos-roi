@@ -23,6 +23,7 @@
     width:100% !important;
     height:100% !important;       /* que use todo el espacio disponible */
     display:block;
+    background:#fff; 
   }
 </style>
 
@@ -239,6 +240,20 @@ function build(payload){
   const maxY    = Math.max(maxBar, maxLine, 1);
 
   const backgroundFillPlugin = {
+  id: 'backgroundFill',
+  beforeDraw(chart) {
+    const { ctx, width, height } = chart;
+    ctx.save();
+    // pinta TODO el canvas de blanco antes de dibujar cualquier cosa
+    ctx.globalCompositeOperation = 'destination-over';
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, width, height);
+    ctx.restore();
+  }
+};
+
+
+  /*const backgroundFillPlugin = {
     id: 'backgroundFill',
     beforeDraw(chart) {
       const { ctx, chartArea } = chart;
@@ -249,13 +264,14 @@ function build(payload){
       ctx.fillRect(left, top, width, height);
       ctx.restore();
     }
-  };
+  };*/
 
 
  try {
     if (chart) chart.destroy();
     chart = new Chart(canvas, {
     type: 'bar',   // ← ESTA LÍNEA ES LA DIFERENCIA
+    plugins: [backgroundFillPlugin],  // 👈 aquí lo registras
     data:{
       labels,
       datasets:[
