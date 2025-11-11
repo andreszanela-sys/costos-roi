@@ -120,9 +120,9 @@ function ensureArraysFromPayload(payload){
 // tasa recuperable según nivel (para la línea)
 function urgFromAvg(avg, cfg){
   const r = (cfg?.recRates) || {};
-  if (avg<=2.0) return {tag:'En crisis',      recRate:r.crisis       ?? 0.70};
-  if (avg<=3.0) return {tag:'Desconectado',   recRate:r.desconectado ?? 0.60};
-  if (avg<=4.0) return {tag:'En transición',  recRate:r.transicion   ?? 0.45};
+  if (avg<=2.3) return {tag:'En crisis',      recRate:r.crisis       ?? 0.70};
+  if (avg<=3.2) return {tag:'Desconectado',   recRate:r.desconectado ?? 0.60};
+  if (avg<=4.1) return {tag:'En transición',  recRate:r.transicion   ?? 0.45};
   return            {tag:'Regenerativa',      recRate:r.regenerativa ?? 0.30};
 }
 
